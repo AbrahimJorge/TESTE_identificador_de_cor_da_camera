@@ -6,44 +6,29 @@ import pandas as pd
 from scipy.spatial import KDTree
 import ssl
 
-# ==========================================
-# SIMULAÇÃO DOS SEUS MÓDULOS EXTERNOS
-# ==========================================
-# (Substitua pela sua importação real se desejar: from functions.color_translation import traduzir_cor)
-def traduzir_cor(nome_cor):
-    # Função dummy apenas para o código funcionar direto.
-    return nome_cor 
+class ColorDataset:
+    def __init__(self, url="https://raw.githubusercontent.com/codebrainz/color-names/master/output/colors.csv"):
+        self.url = url
+        self.tree = None
+        self.names = None
 
-# Variáveis globais para armazenar a árvore e nomes
-arvore_cores = None
-nomes_cores = None
+    def load(self):
+        try:
+            ssl._create_default_https_context = ssl._create_unverified_context
+            df = pd.read_csv(self.url, names=['Nome', 'Hex', 'R', 'G', 'B'])
+            self.names = df['Nome'].values
+            self.tree = KDTree(df[['R', 'G', 'B']].values)
+            return True
+        except Exception as e:
+            print(f"Erro ao carregar dataset: {e}")
+            return False
 
-# ==========================================
-# DATASET DE CORES
-# ==========================================
-def load_color_dataset():
-    global arvore_cores, nomes_cores
-    print("Baixando dataset de cores do GitHub (865 cores)...")
-    try:
-        ssl._create_default_https_context = ssl._create_unverified_context
-        
-        url_dataset = "https://raw.githubusercontent.com/codebrainz/color-names/master/output/colors.csv"
-        df_cores = pd.read_csv(url_dataset, names=['Nome', 'Hex', 'R', 'G', 'B'])
-        
-        valores_rgb = df_cores[['R', 'G', 'B']].values
-        nomes_cores = df_cores['Nome'].values
-        
-        arvore_cores = KDTree(valores_rgb)
-        
-        print(f"Sucesso! {len(df_cores)} cores carregadas.")
-        return True
-    except Exception as e:
-        print(f"Erro ao baixar ou processar o dataset: {e}")
-        return False
+    def get_closest_color_name(self, r, g, b):
+        if not self.tree:
+            return "Desconhecido"
+        _, index = self.tree.query((r, g, b))
+        return self.names[index]
 
-# ==========================================
-# PAINEL TKINTER
-# ==========================================
 class ResultPanel:
     def __init__(self, root):
         self.root = root
@@ -89,8 +74,7 @@ class ResultPanel:
                              bg="#282828", fg="gray", font=("Arial", 11, "italic"))
         lbl_vazio.pack(pady=10)
         
-        px = self.panel.winfo_x()
-        py = self.panel.winfo_y()
+        px, py = self.panel.winfo_x(), self.panel.winfo_y()
         if px <= 0 and py <= 0:
             px, py = 200, 100
         self.panel.geometry(f"300x50+{px}+{py}")
@@ -109,140 +93,106 @@ class ResultPanel:
             color_box = tk.Label(row, bg=hex_color, width=4, height=1)
             color_box.pack(side=tk.LEFT, padx=(0, 10))
             
-            if len(colors) == 1:
-                text = f"{c['label']}"
-            else:
-                text = f"{c['label']} - {c['pct']:.1f}%"
+            text = f"{c['label']}" if len(colors) == 1 else f"{c['label']} - {c['pct']:.1f}%"
                 
             color_label = tk.Label(row, text=text, bg="#282828", fg="white", font=("Arial", 10, "bold"))
             color_label.pack(side=tk.LEFT)
 
         nova_altura = 20 + (len(colors) * 32)
-        px = self.panel.winfo_x()
-        py = self.panel.winfo_y()
+        px, py = self.panel.winfo_x(), self.panel.winfo_y()
         self.panel.geometry(f"300x{nova_altura}+{px}+{py}")
 
     def destroy(self):
         self.panel.destroy()
 
-
-# ==========================================
-# LÓGICA DO OPENCV (CAMERA E TRACKING)
-# ==========================================
-# Variáveis globais para rastreamento
-frame_atual = None
-hsv_atual = None
-limite_inferior_hsv = None
-limite_superior_hsv = None
-nome_cor_rastreada = None
-cor_bgr_rastreada = None
-
-def get_closest_color_name(r, g, b):
-    global arvore_cores, nomes_cores
-    distancia, indice = arvore_cores.query((r, g, b))
-    nome = nomes_cores[indice]
-    return traduzir_cor(nome)
-
-def mouse_click(event, x, y, flags, param):
-    global frame_atual, hsv_atual, limite_inferior_hsv, limite_superior_hsv
-    global nome_cor_rastreada, cor_bgr_rastreada, painel_tk
-
-    if event == cv2.EVENT_LBUTTONDOWN:
-        if frame_atual is not None and hsv_atual is not None:
-            # 1. Pega os valores do pixel exato (Forçando para int normal do Python)
-            b, g, r = int(frame_atual[y, x][0]), int(frame_atual[y, x][1]), int(frame_atual[y, x][2])
-            h, s, v = int(hsv_atual[y, x][0]), int(hsv_atual[y, x][1]), int(hsv_atual[y, x][2])
-            
-            # 2. Acha o nome da cor usando o dataset
-            nome_cor_rastreada = get_closest_color_name(r, g, b)
-            cor_bgr_rastreada = (b, g, r)
-
-            # 3. Cria limites dinâmicos para o OpenCV rastrear o objeto
-            # OpenCV HSV limits: H (0-179), S (0-255), V (0-255)
-            h_tolerancia = 15
-            sv_tolerancia = 50
-
-            # 4. Força o tipo np.uint8 exigido pelo cv2.inRange
-            limite_inferior_hsv = np.array([
-                max(0, h - h_tolerancia), 
-                max(50, s - sv_tolerancia), 
-                max(50, v - sv_tolerancia)
-            ], dtype=np.uint8)
-            
-            limite_superior_hsv = np.array([
-                min(179, h + h_tolerancia), 
-                min(255, s + sv_tolerancia), 
-                min(255, v + sv_tolerancia)
-            ], dtype=np.uint8)
-
-            # 4. Atualiza o painel Tkinter
-            painel_tk.update_colors([{
-                "bgr": cor_bgr_rastreada, 
-                "label": nome_cor_rastreada
-            }])
-            painel_tk.show()
-
-def color_analyzer(camera, kernel):
-    global frame_atual, hsv_atual, limite_inferior_hsv, limite_superior_hsv
-    global nome_cor_rastreada, cor_bgr_rastreada, root_tk
-    
-    cv2.namedWindow("Frame RGB")
-    cv2.setMouseCallback("Frame RGB", mouse_click)
-
-    while True: 
-        ret, frame = camera.read()
-        if not ret:
-            break
-
-        frame = imutils.resize(frame, width=1000) 
-        frame_atual = frame.copy()
-        hsv_atual = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV) 
-
-        # Se alguma cor foi clicada, realiza o tracking
-        if limite_inferior_hsv is not None and limite_superior_hsv is not None:
-            mask = cv2.inRange(hsv_atual, limite_inferior_hsv, limite_superior_hsv)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel) 
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-
-            cnts = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2] 
-
-        cv2.imshow("Frame RGB", frame)
+class ColorAnalyzerApp:
+    def __init__(self, dataset):
+        self.dataset = dataset
         
-        # ATUALIZA O TKINTER JUNTO COM O OPENCV
-        try:
-            root_tk.update()
-        except tk.TclError:
-            pass # Ignora caso a janela do Tkinter seja forçadamente fechada
+        self.root_tk = tk.Tk()
+        self.root_tk.withdraw()
+        self.panel_tk = ResultPanel(self.root_tk)
         
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord("q"):
-            break
+        self.camera = cv2.VideoCapture(0)
+        self.kernel = np.ones((9, 9), np.uint8)
+        
+        self.frame_atual = None
+        self.hsv_atual = None
+        self.limite_inferior_hsv = None
+        self.limite_superior_hsv = None
+
+        cv2.namedWindow("Frame RGB")
+        cv2.setMouseCallback("Frame RGB", self.mouse_click)
+
+    def mouse_click(self, event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDOWN:
+            if self.frame_atual is not None and self.hsv_atual is not None:
+                b, g, r = int(self.frame_atual[y, x][0]), int(self.frame_atual[y, x][1]), int(self.frame_atual[y, x][2])
+                h, s, v = int(self.hsv_atual[y, x][0]), int(self.hsv_atual[y, x][1]), int(self.hsv_atual[y, x][2])
+                
+                nome_cor_rastreada = self.dataset.get_closest_color_name(r, g, b)
+                cor_bgr_rastreada = (b, g, r)
+
+                h_tolerancia = 15
+                sv_tolerancia = 50
+
+                self.limite_inferior_hsv = np.array([
+                    max(0, h - h_tolerancia), 
+                    max(50, s - sv_tolerancia), 
+                    max(50, v - sv_tolerancia)
+                ], dtype=np.uint8)
+                
+                self.limite_superior_hsv = np.array([
+                    min(179, h + h_tolerancia), 
+                    min(255, s + sv_tolerancia), 
+                    min(255, v + sv_tolerancia)
+                ], dtype=np.uint8)
+
+                self.panel_tk.update_colors([{
+                    "bgr": cor_bgr_rastreada, 
+                    "label": nome_cor_rastreada
+                }])
+                self.panel_tk.show()
+
+    def run(self):
+        while True:
+            ret, frame = self.camera.read()
+            if not ret:
+                break
+
+            frame = imutils.resize(frame, width=1000)
+            self.frame_atual = frame.copy()
+            self.hsv_atual = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+
+            if self.limite_inferior_hsv is not None and self.limite_superior_hsv is not None:
+                mask = cv2.inRange(self.hsv_atual, self.limite_inferior_hsv, self.limite_superior_hsv)
+                mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, self.kernel)
+                mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, self.kernel)
+                _ = cv2.findContours(mask.copy(), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)[-2]
+
+            cv2.imshow("Frame RGB", frame)
+            
+            try:
+                self.root_tk.update()
+            except tk.TclError:
+                pass
+            
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
+
+    def cleanup(self):
+        self.camera.release()
+        cv2.destroyAllWindows()
+        self.root_tk.destroy()
 
 if __name__ == '__main__':
-    # 1. Carrega o dataset
-    sucesso = load_color_dataset()
-    
-    if sucesso:
+    dataset = ColorDataset()
+    if dataset.load():
+        app = ColorAnalyzerApp(dataset)
         try:
-            # 2. Inicializa o Tkinter (Root invisível, só o Painel aparece)
-            root_tk = tk.Tk()
-            root_tk.withdraw()
-            painel_tk = ResultPanel(root_tk)
-
-            # 3. Inicializa Câmera
-            camera = cv2.VideoCapture(0) 
-            kernel = np.ones((9, 9), np.uint8) 
-
-            # 4. Roda o analisador
-            color_analyzer(camera, kernel)
-
-            # 5. Limpa memória ao sair
-            camera.release()
-            cv2.destroyAllWindows()
-            root_tk.destroy()
-
+            app.run()
         except Exception as error:
-            if 'camera' in locals():
-                camera.release()
-            cv2.destroyAllWindows()
             print(f"Ocorreu um erro: {error}")
+        finally:
+            app.cleanup()
